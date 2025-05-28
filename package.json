@@ -10,11 +10,13 @@
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",
+    "cloudinary": "^2.6.1",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.15.1",
     "next": "15.3.2",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "sharp": "^0.34.2"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
