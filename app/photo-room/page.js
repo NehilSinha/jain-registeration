@@ -16,7 +16,7 @@ export default function PhotoRoom() {
   const [stream, setStream] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [adminData, setAdminData] = useState(null);
-  
+
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -31,7 +31,7 @@ export default function PhotoRoom() {
       }
 
       const admin = clientAuth.getAdminData();
-      
+
       // Check if admin has photo_admin role
       if (admin?.role !== 'photo_admin') {
         setMessage('Access denied: You need photo admin privileges to access this page');
@@ -58,7 +58,7 @@ export default function PhotoRoom() {
 
   const searchStudent = async () => {
     if (!isAuthenticated) return;
-    
+
     if (!studentId.trim()) {
       setMessage('Please enter a Student ID');
       return;
@@ -103,7 +103,7 @@ export default function PhotoRoom() {
   const startCamera = async () => {
     try {
       setMessage('Requesting camera access...');
-      
+
       // Check if camera is supported
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error('Camera not supported on this device');
@@ -111,7 +111,7 @@ export default function PhotoRoom() {
 
       // Try different camera configurations
       let mediaStream;
-      
+
       try {
         // First try: Back camera with specific constraints
         mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -124,7 +124,7 @@ export default function PhotoRoom() {
         });
       } catch (backCameraError) {
         console.log('Back camera failed, trying front camera:', backCameraError);
-        
+
         try {
           // Second try: Front camera
           mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -137,7 +137,7 @@ export default function PhotoRoom() {
           });
         } catch (frontCameraError) {
           console.log('Front camera failed, trying any camera:', frontCameraError);
-          
+
           // Third try: Any available camera
           mediaStream = await navigator.mediaDevices.getUserMedia({
             video: {
@@ -148,15 +148,15 @@ export default function PhotoRoom() {
           });
         }
       }
-      
+
       setStream(mediaStream);
       setShowCamera(true);
       setMessage('');
-      
+
       // Set video stream and wait for it to load
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
-        
+
         // Wait for video to be ready
         videoRef.current.onloadedmetadata = () => {
           console.log('Video metadata loaded');
@@ -165,17 +165,17 @@ export default function PhotoRoom() {
             setMessage('Error starting video preview');
           });
         };
-        
+
         videoRef.current.onerror = (e) => {
           console.error('Video error:', e);
           setMessage('Video error occurred');
         };
       }
-      
+
     } catch (error) {
       console.error('Camera error:', error);
       stopCamera();
-      
+
       let errorMessage = 'Unable to access camera. ';
       if (error.name === 'NotAllowedError') {
         errorMessage += 'Please allow camera permissions and try again.';
@@ -186,7 +186,7 @@ export default function PhotoRoom() {
       } else {
         errorMessage += 'Please use file upload instead.';
       }
-      
+
       setMessage(errorMessage);
     }
   };
@@ -222,12 +222,12 @@ export default function PhotoRoom() {
       if (blob) {
         const file = new File([blob], 'student-photo.jpg', { type: 'image/jpeg' });
         const preview = canvas.toDataURL('image/jpeg', 0.8);
-        
+
         setCapturedPhoto({
           file: file,
           preview: preview
         });
-        
+
         // Stop camera after capture
         stopCamera();
         setMessage('Photo captured successfully!');
@@ -258,27 +258,62 @@ export default function PhotoRoom() {
 
   const uploadPhoto = async () => {
     if (!isAuthenticated) return;
-    
+
     if (!capturedPhoto || !student) {
       setMessage('Please capture/select a photo and verify student details');
       return;
     }
 
     setUploading(true);
-    setMessage('Uploading photo...');
+    setMessage('Uploading photo... Please wait');
 
     try {
+      // Create FormData for file upload
       const formData = new FormData();
       formData.append('studentId', student.studentId);
-      formData.append('photo', capturedPhoto.file);
+
+      // Handle different photo sources
+      let fileToUpload = capturedPhoto.file;
+
+      // If file is too large, try to compress it on client side
+      if (fileToUpload.size > 8 * 1024 * 1024) { // 8MB
+        setMessage('Photo is large, compressing...');
+        try {
+          fileToUpload = await compressImageFile(fileToUpload);
+        } catch (compressionError) {
+          console.error('Compression failed:', compressionError);
+          setMessage('Photo too large. Please try with a smaller image.');
+          setUploading(false);
+          return;
+        }
+      }
+
+      formData.append('photo', fileToUpload);
+
+      console.log('📸 Uploading photo:', {
+        studentId: student.studentId,
+        originalSize: capturedPhoto.file.size,
+        finalSize: fileToUpload.size,
+        type: fileToUpload.type
+      });
+
+      // Upload with longer timeout for mobile networks
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
 
       const response = await fetch('/api/students/photo-upload', {
         method: 'POST',
         headers: {
           ...clientAuth.getAuthHeaders()
+          // Don't set Content-Type for FormData - browser sets it automatically
         },
         body: formData,
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
+
+      console.log('📸 Upload response status:', response.status);
 
       if (response.status === 401) {
         clientAuth.logout();
@@ -286,7 +321,14 @@ export default function PhotoRoom() {
         return;
       }
 
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Upload failed with status:', response.status, errorText);
+        throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
+      }
+
       const data = await response.json();
+      console.log('📸 Upload successful:', data);
 
       if (data.success) {
         setMessage(`Success! Application Number: ${data.applicationNumber}`);
@@ -303,13 +345,74 @@ export default function PhotoRoom() {
           fileInputRef.current.value = '';
         }
       } else {
-        setMessage(data.error);
+        setMessage(data.error || 'Upload failed');
       }
     } catch (error) {
-      setMessage('Upload failed. Please try again.');
+      console.error('Upload error:', error);
+
+      if (error.name === 'AbortError') {
+        setMessage('Upload timeout. Please check your internet connection and try again.');
+      } else if (error.message.includes('NetworkError') || error.message.includes('Failed to fetch')) {
+        setMessage('Network error. Please check your internet connection and try again.');
+      } else {
+        setMessage(`Upload failed: ${error.message}. Please try again.`);
+      }
     } finally {
       setUploading(false);
     }
+  };
+
+  // Client-side image compression function
+  const compressImageFile = (file) => {
+    return new Promise((resolve, reject) => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      const img = new Image();
+
+      img.onload = () => {
+        // Calculate new dimensions (max 1024x1024)
+        const maxSize = 1024;
+        let { width, height } = img;
+
+        if (width > height) {
+          if (width > maxSize) {
+            height = (height * maxSize) / width;
+            width = maxSize;
+          }
+        } else {
+          if (height > maxSize) {
+            width = (width * maxSize) / height;
+            height = maxSize;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        // Draw and compress
+        ctx.drawImage(img, 0, 0, width, height);
+
+        canvas.toBlob(
+          (blob) => {
+            if (blob) {
+              const compressedFile = new File([blob], file.name, {
+                type: 'image/jpeg',
+                lastModified: Date.now()
+              });
+              console.log(`📸 Compressed: ${(file.size / 1024 / 1024).toFixed(2)}MB → ${(compressedFile.size / 1024 / 1024).toFixed(2)}MB`);
+              resolve(compressedFile);
+            } else {
+              reject(new Error('Compression failed'));
+            }
+          },
+          'image/jpeg',
+          0.8 // 80% quality
+        );
+      };
+
+      img.onerror = () => reject(new Error('Failed to load image'));
+      img.src = URL.createObjectURL(file);
+    });
   };
 
   const resetForm = () => {
@@ -354,7 +457,7 @@ export default function PhotoRoom() {
             )}
           </div>
           <div style={{ display: 'flex', gap: '10px' }}>
-            <button 
+            <button
               onClick={handleLogout}
               className="btn"
               style={{ backgroundColor: '#dc3545' }}
@@ -382,8 +485,8 @@ export default function PhotoRoom() {
               placeholder="Enter Student ID (e.g., 2025123456)"
               style={{ flex: 1, minWidth: '200px' }}
             />
-            <button 
-              onClick={searchStudent} 
+            <button
+              onClick={searchStudent}
               disabled={loading}
               className="btn"
               style={{ padding: '12px 20px' }}
@@ -411,7 +514,7 @@ export default function PhotoRoom() {
                 <strong>Phone:</strong> {student.phone}
               </div>
               <div>
-                <strong>Status:</strong> 
+                <strong>Status:</strong>
                 <span className={`status-badge status-${student.status}`} style={{ marginLeft: '5px' }}>
                   {student.status.replace('_', ' ').toUpperCase()}
                 </span>
@@ -429,7 +532,7 @@ export default function PhotoRoom() {
         {student && !capturedPhoto && (
           <>
             <h3>Capture Student Photo</h3>
-            
+
             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '20px' }}>
               {/* Mobile Camera Capture - Native approach */}
               <div style={{ flex: 1, minWidth: '150px' }}>
@@ -441,7 +544,7 @@ export default function PhotoRoom() {
                   style={{ display: 'none' }}
                   id="mobileCamera"
                 />
-                <button 
+                <button
                   onClick={() => document.getElementById('mobileCamera')?.click()}
                   className="btn btn-success"
                   style={{ width: '100%', padding: '15px' }}
@@ -449,7 +552,7 @@ export default function PhotoRoom() {
                   📷 Take Photo (Camera)
                 </button>
               </div>
-              
+
               {/* Regular File Upload */}
               <div style={{ flex: 1, minWidth: '150px' }}>
                 <input
@@ -460,7 +563,7 @@ export default function PhotoRoom() {
                   style={{ display: 'none' }}
                   id="fileUpload"
                 />
-                <button 
+                <button
                   onClick={() => fileInputRef.current?.click()}
                   className="btn"
                   style={{ width: '100%', padding: '15px' }}
@@ -472,12 +575,12 @@ export default function PhotoRoom() {
 
             {/* Advanced Camera (for desktop/supported browsers) */}
             <div style={{ marginBottom: '20px' }}>
-              <button 
+              <button
                 onClick={startCamera}
                 disabled={showCamera}
                 className="btn"
-                style={{ 
-                  width: '100%', 
+                style={{
+                  width: '100%',
                   padding: '12px',
                   backgroundColor: '#17a2b8',
                   opacity: showCamera ? 0.6 : 1
@@ -489,10 +592,10 @@ export default function PhotoRoom() {
 
             {/* Camera Interface */}
             {showCamera && (
-              <div style={{ 
-                backgroundColor: '#000', 
-                borderRadius: '8px', 
-                padding: '15px', 
+              <div style={{
+                backgroundColor: '#000',
+                borderRadius: '8px',
+                padding: '15px',
                 margin: '20px 0',
                 textAlign: 'center'
               }}>
@@ -510,7 +613,7 @@ export default function PhotoRoom() {
                       backgroundColor: '#333'
                     }}
                   />
-                  
+
                   {/* Loading overlay */}
                   <div style={{
                     position: 'absolute',
@@ -524,22 +627,22 @@ export default function PhotoRoom() {
                     Loading camera...
                   </div>
                 </div>
-                
+
                 <div style={{ marginTop: '15px', display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                  <button 
+                  <button
                     onClick={capturePhoto}
                     disabled={!stream}
                     className="btn btn-success"
-                    style={{ 
-                      padding: '15px 30px', 
+                    style={{
+                      padding: '15px 30px',
                       fontSize: '16px',
                       opacity: stream ? 1 : 0.6
                     }}
                   >
                     📸 Capture Photo
                   </button>
-                  
-                  <button 
+
+                  <button
                     onClick={stopCamera}
                     className="btn"
                     style={{ padding: '15px 30px', fontSize: '16px', backgroundColor: '#6c757d' }}
@@ -547,7 +650,7 @@ export default function PhotoRoom() {
                     ❌ Cancel
                   </button>
                 </div>
-                
+
                 {/* Debug info */}
                 <div style={{ marginTop: '10px', fontSize: '12px', color: '#ccc' }}>
                   {stream ? '✅ Camera active' : '⏳ Starting camera...'}
@@ -565,28 +668,28 @@ export default function PhotoRoom() {
           <div style={{ margin: '20px 0' }}>
             <h3>Photo Preview</h3>
             <div style={{ textAlign: 'center' }}>
-              <img 
-                src={capturedPhoto.preview} 
+              <img
+                src={capturedPhoto.preview}
                 alt="Student photo preview"
-                style={{ 
-                  maxWidth: '300px', 
-                  maxHeight: '300px', 
+                style={{
+                  maxWidth: '300px',
+                  maxHeight: '300px',
                   border: '2px solid #ddd',
                   borderRadius: '8px'
                 }}
               />
-              
+
               <div style={{ marginTop: '15px', display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                <button 
-                  onClick={uploadPhoto} 
+                <button
+                  onClick={uploadPhoto}
                   disabled={uploading}
                   className="btn btn-success"
                   style={{ padding: '12px 24px' }}
                 >
                   {uploading ? 'Uploading...' : '✅ Upload & Generate Application Number'}
                 </button>
-                
-                <button 
+
+                <button
                   onClick={retakePhoto}
                   className="btn"
                   style={{ padding: '12px 24px', backgroundColor: '#ffc107' }}
@@ -601,7 +704,7 @@ export default function PhotoRoom() {
         {/* Action Buttons */}
         {student && (
           <div style={{ display: 'flex', gap: '10px', marginTop: '30px', justifyContent: 'center', flexWrap: 'wrap' }}>
-            <button 
+            <button
               onClick={resetForm}
               className="btn"
               style={{ padding: '12px 20px', backgroundColor: '#6c757d' }}

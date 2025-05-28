@@ -55,11 +55,14 @@ async function compressImage(buffer, originalSize) {
 }
 
 export async function POST(request) {
+  console.log('📸 Photo upload request received');
+  
   try {
     // Check authentication
     const authHeader = request.headers.get('authorization');
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.log('❌ No authorization header');
       return NextResponse.json(
         { error: 'Access denied. Authentication required.' },
         { status: 401 }
@@ -70,6 +73,7 @@ export async function POST(request) {
     const verification = verifyToken(token);
 
     if (!verification.valid) {
+      console.log('❌ Invalid token');
       return NextResponse.json(
         { error: 'Access denied. Invalid token.' },
         { status: 401 }
@@ -79,52 +83,122 @@ export async function POST(request) {
     // Check if user has photo_admin role
     const userData = verification.data;
     if (userData.role !== 'photo_admin') {
+      console.log('❌ Not photo admin');
       return NextResponse.json(
         { error: 'Access denied. Photo admin privileges required.' },
         { status: 403 }
       );
     }
 
+    console.log('✅ Authentication successful');
     await connectDB();
+    console.log('✅ Database connected');
     
-    const formData = await request.formData();
+    // Parse form data with error handling
+    let formData;
+    try {
+      formData = await request.formData();
+      console.log('✅ Form data parsed');
+    } catch (formError) {
+      console.error('❌ Form data parsing error:', formError);
+      return NextResponse.json(
+        { error: 'Failed to parse form data. Please try again.' },
+        { status: 400 }
+      );
+    }
+
     const studentId = formData.get('studentId');
     const photoFile = formData.get('photo');
 
+    console.log('📋 Form data:', {
+      studentId,
+      photoFile: photoFile ? {
+        name: photoFile.name,
+        size: photoFile.size,
+        type: photoFile.type
+      } : 'null'
+    });
+
     if (!studentId || !photoFile) {
+      console.log('❌ Missing required fields');
       return NextResponse.json(
         { error: 'Student ID and photo are required' },
         { status: 400 }
       );
     }
 
+    // Validate file type
+    if (!photoFile.type.startsWith('image/')) {
+      console.log('❌ Invalid file type:', photoFile.type);
+      return NextResponse.json(
+        { error: 'Please upload a valid image file' },
+        { status: 400 }
+      );
+    }
+
+    // Validate file size (50MB max for processing)
+    const maxFileSize = 50 * 1024 * 1024; // 50MB
+    if (photoFile.size > maxFileSize) {
+      console.log('❌ File too large:', photoFile.size);
+      return NextResponse.json(
+        { error: 'File is too large. Please use a smaller image.' },
+        { status: 400 }
+      );
+    }
+
     // Find student by ID
+    console.log('🔍 Finding student:', studentId);
     const student = await Student.findOne({ studentId });
     if (!student) {
+      console.log('❌ Student not found:', studentId);
       return NextResponse.json(
         { error: 'Student not found with this ID' },
         { status: 404 }
       );
     }
 
+    console.log('✅ Student found:', student.name);
+
     try {
-      // Convert file to buffer
-      const bytes = await photoFile.arrayBuffer();
-      const originalBuffer = Buffer.from(bytes);
+      // Convert file to buffer with error handling
+      let bytes, originalBuffer;
+      try {
+        bytes = await photoFile.arrayBuffer();
+        originalBuffer = Buffer.from(bytes);
+        console.log('✅ File converted to buffer:', originalBuffer.length, 'bytes');
+      } catch (bufferError) {
+        console.error('❌ Buffer conversion error:', bufferError);
+        return NextResponse.json(
+          { error: 'Failed to process image file. Please try again.' },
+          { status: 400 }
+        );
+      }
+
       const originalSize = originalBuffer.length;
+      console.log(`📸 Original image size: ${(originalSize / 1024 / 1024).toFixed(2)}MB`);
 
       // Check if image needs compression
       const maxSize = 8 * 1024 * 1024; // 8MB - safe limit for Cloudinary free
       let finalBuffer = originalBuffer;
 
       if (originalSize > maxSize) {
-        console.log(`📸 Image too large (${(originalSize / 1024 / 1024).toFixed(2)}MB), compressing...`);
-        finalBuffer = await compressImage(originalBuffer, originalSize);
-        
-        // Check if still too large after compression
-        if (finalBuffer.length > maxSize) {
+        console.log('📸 Image needs compression...');
+        try {
+          finalBuffer = await compressImage(originalBuffer, originalSize);
+          console.log(`✅ Compression successful: ${(finalBuffer.length / 1024 / 1024).toFixed(2)}MB`);
+          
+          // Check if still too large after compression
+          if (finalBuffer.length > maxSize) {
+            console.log('❌ Still too large after compression');
+            return NextResponse.json(
+              { error: 'Image is too large even after compression. Please use a smaller image.' },
+              { status: 400 }
+            );
+          }
+        } catch (compressionError) {
+          console.error('❌ Compression failed:', compressionError);
           return NextResponse.json(
-            { error: 'Image is too large even after compression. Please use a smaller image.' },
+            { error: 'Failed to compress image. Please try with a smaller image.' },
             { status: 400 }
           );
         }
@@ -134,39 +208,74 @@ export async function POST(request) {
       const base64String = finalBuffer.toString('base64');
       const dataURI = `data:image/jpeg;base64,${base64String}`;
 
-      console.log(`📸 Uploading photo for student: ${studentId} (${(finalBuffer.length / 1024 / 1024).toFixed(2)}MB)`);
+      console.log(`📸 Uploading to Cloudinary for student: ${studentId} (${(finalBuffer.length / 1024 / 1024).toFixed(2)}MB)`);
 
-      // Upload to Cloudinary with aggressive optimization
-      const uploadResult = await cloudinary.uploader.upload(dataURI, {
-        folder: 'college-registration/student-photos',
-        public_id: `student_${studentId}_${Date.now()}`,
-        transformation: [
-          { width: 600, height: 600, crop: 'fill' }, // Resize to 600x600
-          { quality: 'auto:good' }, // Auto-optimize quality
-          { format: 'jpg' }, // Convert to JPG
-          { fetch_format: 'auto' } // Use best format for browser
-        ],
-        overwrite: true,
-        invalidate: true,
-        // Additional compression settings
-        flags: 'progressive',
-        resource_type: 'image'
-      });
+      // Upload to Cloudinary with comprehensive error handling
+      let uploadResult;
+      try {
+        uploadResult = await cloudinary.uploader.upload(dataURI, {
+          folder: 'college-registration/student-photos',
+          public_id: `student_${studentId}_${Date.now()}`,
+          transformation: [
+            { width: 600, height: 600, crop: 'fill' },
+            { quality: 'auto:good' },
+            { format: 'jpg' },
+            { fetch_format: 'auto' }
+          ],
+          overwrite: true,
+          invalidate: true,
+          flags: 'progressive',
+          resource_type: 'image',
+          timeout: 60000 // 60 second timeout
+        });
 
-      console.log(`✅ Cloudinary upload successful: ${uploadResult.secure_url}`);
-      console.log(`📊 Final Cloudinary size: ${(uploadResult.bytes / 1024 / 1024).toFixed(2)}MB`);
+        console.log(`✅ Cloudinary upload successful: ${uploadResult.secure_url}`);
+        console.log(`📊 Final Cloudinary size: ${(uploadResult.bytes / 1024 / 1024).toFixed(2)}MB`);
+      } catch (cloudinaryError) {
+        console.error('❌ Cloudinary upload error:', cloudinaryError);
+        
+        // Handle specific Cloudinary errors
+        if (cloudinaryError.message?.includes('File size too large')) {
+          return NextResponse.json(
+            { error: 'Image is too large for upload. Please use a smaller image.' },
+            { status: 400 }
+          );
+        } else if (cloudinaryError.message?.includes('timeout')) {
+          return NextResponse.json(
+            { error: 'Upload timed out. Please check your connection and try again.' },
+            { status: 408 }
+          );
+        } else if (cloudinaryError.message?.includes('Invalid image')) {
+          return NextResponse.json(
+            { error: 'Invalid image format. Please use JPG or PNG.' },
+            { status: 400 }
+          );
+        } else {
+          return NextResponse.json(
+            { error: 'Failed to upload photo. Please try again.' },
+            { status: 500 }
+          );
+        }
+      }
 
       // Generate application number
       const applicationNumber = `APP${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
       // Update student with Cloudinary URL
-      student.photoUrl = uploadResult.secure_url;
-      student.applicationNumber = applicationNumber;
-      student.status = 'photo_taken';
-      
-      await student.save();
-
-      console.log(`✅ Student ${studentId} updated with compressed photo URL`);
+      try {
+        student.photoUrl = uploadResult.secure_url;
+        student.applicationNumber = applicationNumber;
+        student.status = 'photo_taken';
+        
+        await student.save();
+        console.log(`✅ Student ${studentId} updated with photo URL`);
+      } catch (dbError) {
+        console.error('❌ Database update error:', dbError);
+        return NextResponse.json(
+          { error: 'Photo uploaded but failed to update student record. Please contact admin.' },
+          { status: 500 }
+        );
+      }
 
       return NextResponse.json({
         success: true,
@@ -192,25 +301,16 @@ export async function POST(request) {
         }
       });
 
-    } catch (cloudinaryError) {
-      console.error('Cloudinary upload error:', cloudinaryError);
-      
-      // Provide specific error messages
-      if (cloudinaryError.message?.includes('File size too large')) {
-        return NextResponse.json(
-          { error: 'Image is too large. Please use a smaller image or compress it before uploading.' },
-          { status: 400 }
-        );
-      }
-      
+    } catch (unexpectedError) {
+      console.error('❌ Unexpected error in photo processing:', unexpectedError);
       return NextResponse.json(
-        { error: 'Failed to upload photo. Please try again with a smaller image.' },
+        { error: 'An unexpected error occurred. Please try again.' },
         { status: 500 }
       );
     }
 
   } catch (error) {
-    console.error('Photo upload error:', error);
+    console.error('❌ Photo upload error:', error);
     return NextResponse.json(
       { error: 'Photo upload failed. Please try again.' },
       { status: 500 }
