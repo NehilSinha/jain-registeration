@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
-export default function AdminLogin() {
+// Separate component that uses useSearchParams
+function AdminLoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirectTo = searchParams?.get('redirect') || '/';
@@ -214,5 +215,20 @@ export default function AdminLogin() {
         </div>
       </div>
     </div>
+  );
+}
+
+// Main component with Suspense wrapper
+export default function AdminLogin() {
+  return (
+    <Suspense fallback={
+      <div className="container">
+        <div className="card" style={{ maxWidth: '400px', margin: '50px auto', textAlign: 'center' }}>
+          <div>Loading admin login...</div>
+        </div>
+      </div>
+    }>
+      <AdminLoginForm />
+    </Suspense>
   );
 }
