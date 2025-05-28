@@ -1,0 +1,538 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+
+export default function StudentRegister() {
+  const router = useRouter();
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
+  const [studentData, setStudentData] = useState(null);
+  const [checkingStatus, setCheckingStatus] = useState(false);
+  const [formData, setFormData] = useState({
+    name: '',
+    phone: '',
+    email: '',
+    department: '',
+    parentName: '',
+    parentEmail: '',
+    parentPhone: '',
+    dob: ''
+  });
+
+  const departments = [
+    'Computer Science',
+    'Electronics',
+    'Mechanical',
+    'Civil',
+    'Chemical'
+  ];
+
+  // Check localStorage on component mount
+  useEffect(() => {
+    try {
+      const savedStudentData = localStorage.getItem('studentRegistration');
+      console.log('Checking localStorage:', savedStudentData);
+      
+      if (savedStudentData) {
+        const parsedData = JSON.parse(savedStudentData);
+        console.log('Found saved data:', parsedData);
+        setStudentData(parsedData);
+        setMessage('Welcome back! Your registration details are shown below.');
+      }
+    } catch (error) {
+      console.error('localStorage error:', error);
+      localStorage.removeItem('studentRegistration');
+    }
+  }, []);
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    console.log(`Field changed: ${name} = ${value}`);
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+
+  const validateForm = () => {
+    const requiredFields = [
+      { key: 'name', label: 'Full Name' },
+      { key: 'phone', label: 'Phone Number' },
+      { key: 'email', label: 'Email Address' },
+      { key: 'department', label: 'Department' },
+      { key: 'dob', label: 'Date of Birth' },
+      { key: 'parentName', label: 'Parent Name' },
+      { key: 'parentEmail', label: 'Parent Email' },
+      { key: 'parentPhone', label: 'Parent Phone' }
+    ];
+
+    for (let field of requiredFields) {
+      if (!formData[field.key] || formData[field.key].trim() === '') {
+        return `Please fill in: ${field.label}`;
+      }
+    }
+
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(formData.email)) {
+      return 'Please enter a valid email address';
+    }
+    if (!emailRegex.test(formData.parentEmail)) {
+      return 'Please enter a valid parent email address';
+    }
+
+    // Phone validation (basic)
+    if (formData.phone.length < 10) {
+      return 'Please enter a valid phone number';
+    }
+    if (formData.parentPhone.length < 10) {
+      return 'Please enter a valid parent phone number';
+    }
+
+    return null;
+  };
+
+  const handleRegistration = async () => {
+    console.log('Registration button clicked');
+    console.log('Current form data:', formData);
+
+    // Validate form
+    const validationError = validateForm();
+    if (validationError) {
+      setMessage(validationError);
+      return;
+    }
+
+    setLoading(true);
+    setMessage('Processing registration...');
+
+    try {
+      console.log('Sending API request...');
+      
+      const response = await fetch('/api/students/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(formData),
+      });
+
+      console.log('API Response status:', response.status);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log('API Response data:', data);
+
+      if (data.success) {
+        const registrationData = {
+          name: data.data.name,
+          studentId: data.studentId,
+          department: data.data.department,
+          status: 'pending',
+          hasPhoto: false,
+          applicationNumber: null,
+          registrationDate: new Date().toISOString()
+        };
+
+        console.log('Saving to localStorage:', registrationData);
+        
+        // Save to localStorage
+        localStorage.setItem('studentRegistration', JSON.stringify(registrationData));
+        
+        // Verify it was saved
+        const saved = localStorage.getItem('studentRegistration');
+        console.log('Verification - data saved:', saved);
+        
+        // Set student data to hide form
+        setStudentData(registrationData);
+        setMessage('Registration successful! 🎉');
+        
+      } else {
+        setMessage(data.error || 'Registration failed');
+      }
+    } catch (error) {
+      console.error('Registration error:', error);
+      setMessage(`Error: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const checkStudentStatus = async () => {
+    if (!studentData || !studentData.studentId) {
+      setMessage('No student data found. Please register first.');
+      return;
+    }
+
+    setCheckingStatus(true);
+    setMessage('Checking status...');
+
+    try {
+      const response = await fetch('/api/students/status', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ studentId: studentData.studentId }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data.success) {
+        const updatedData = {
+          name: data.student.name,
+          studentId: data.student.studentId,
+          department: data.student.department,
+          status: data.student.status,
+          hasPhoto: data.student.hasPhoto,
+          applicationNumber: data.student.applicationNumber,
+          registrationDate: data.student.registrationDate
+        };
+        
+        localStorage.setItem('studentRegistration', JSON.stringify(updatedData));
+        setStudentData(updatedData);
+        setMessage('Status updated successfully! 🎉');
+      } else {
+        setMessage(data.error || 'Failed to update status');
+      }
+    } catch (error) {
+      console.error('Status check error:', error);
+      setMessage(`Error: ${error.message}`);
+    } finally {
+      setCheckingStatus(false);
+    }
+  };
+
+  const clearRegistration = () => {
+    if (confirm('Clear your registration data?')) {
+      localStorage.removeItem('studentRegistration');
+      setStudentData(null);
+      setMessage('');
+    }
+  };
+
+  const getStatusMessage = () => {
+    if (!studentData) return '';
+    
+    switch (studentData.status) {
+      case 'pending':
+        return 'Next: Visit the photo room with your Student ID';
+      case 'photo_taken':
+        return 'Next: Visit your department admin for document verification';
+      case 'documents_verified':
+        return 'Registration complete! ✅';
+      default:
+        return 'Contact administration for status update';
+    }
+  };
+
+  const getDisplayId = () => {
+    if (!studentData) return { label: '', value: '' };
+    
+    if (studentData.applicationNumber) {
+      return {
+        label: 'Application Number',
+        value: studentData.applicationNumber
+      };
+    } else {
+      return {
+        label: 'Student ID',
+        value: studentData.studentId
+      };
+    }
+  };
+
+  // Show student status if data exists
+  if (studentData) {
+    const displayId = getDisplayId();
+    
+    return (
+      <div className="container">
+        <div className="card">
+          <h1>Your Registration Status</h1>
+          
+          {message && (
+            <div className={`alert ${message.includes('successful') || message.includes('Welcome') ? 'alert-success' : 'alert-error'}`}>
+              {message}
+            </div>
+          )}
+
+          <div style={{ textAlign: 'center', padding: '20px 0' }}>
+            <h2>Welcome, {studentData.name}!</h2>
+            
+            <div style={{ 
+              background: '#f8f9fa', 
+              padding: '20px', 
+              borderRadius: '8px', 
+              margin: '20px 0',
+              border: '2px solid #3498db'
+            }}>
+              <h3 style={{ color: '#2c3e50', marginBottom: '10px' }}>
+                Your {displayId.label}
+              </h3>
+              <div style={{ 
+                fontSize: '24px', 
+                fontWeight: 'bold', 
+                color: '#3498db',
+                fontFamily: 'monospace',
+                letterSpacing: '1px',
+                backgroundColor: 'white',
+                padding: '15px',
+                borderRadius: '5px',
+                border: '1px solid #ddd',
+                wordBreak: 'break-all'
+              }}>
+                {displayId.value}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '20px' }}>
+              <p><strong>Department:</strong> {studentData.department}</p>
+              <p><strong>Status:</strong> 
+                <span 
+                  className={`status-badge status-${studentData.status}`}
+                  style={{ marginLeft: '5px' }}
+                >
+                  {studentData.status.replace('_', ' ').toUpperCase()}
+                </span>
+              </p>
+            </div>
+
+            <div className="alert alert-success">
+              <strong>{getStatusMessage()}</strong>
+            </div>
+
+            {studentData.applicationNumber && (
+              <div style={{ marginTop: '20px', fontSize: '14px', color: '#666' }}>
+                <p>Original Student ID: {studentData.studentId}</p>
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center', marginTop: '30px' }}>
+            <button 
+              onClick={checkStudentStatus}
+              disabled={checkingStatus}
+              className="btn btn-success"
+              style={{ minWidth: '120px' }}
+            >
+              {checkingStatus ? 'Updating...' : '🔄 Update Status'}
+            </button>
+            
+            <button 
+              onClick={() => router.push('/')}
+              className="btn"
+              style={{ backgroundColor: '#6c757d', minWidth: '120px' }}
+            >
+              🏠 Home
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show registration form
+  return (
+    <div className="container">
+      <div className="card">
+        <h1>Student Registration</h1>
+        <p>Please fill in all the details for your college registration</p>
+        
+        {message && (
+          <div className={`alert ${message.includes('successful') ? 'alert-success' : 'alert-error'}`}>
+            {message}
+          </div>
+        )}
+
+        <div>
+          <div className="form-group">
+            <label htmlFor="name">Full Name *</label>
+            <input
+              type="text"
+              id="name"
+              name="name"
+              value={formData.name}
+              onChange={handleChange}
+              placeholder="Enter your full name"
+              style={{ fontSize: '16px' }}
+            />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="phone">Phone Number *</label>
+            <input
+              type="tel"
+              id="phone"
+              name="phone"
+              value={formData.phone}
+              onChange={handleChange}
+              placeholder="10-digit phone number"
+              style={{ fontSize: '16px' }}
+            />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="email">Email Address *</label>
+            <input
+              type="email"
+              id="email"
+              name="email"
+              value={formData.email}
+              onChange={handleChange}
+              placeholder="your.email@example.com"
+              style={{ fontSize: '16px' }}
+            />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="department">Department *</label>
+            <select
+              id="department"
+              name="department"
+              value={formData.department}
+              onChange={handleChange}
+              style={{ fontSize: '16px' }}
+            >
+              <option value="">Select Department</option>
+              {departments.map(dept => (
+                <option key={dept} value={dept}>{dept}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="dob">Date of Birth *</label>
+            <input
+              type="date"
+              id="dob"
+              name="dob"
+              value={formData.dob}
+              onChange={handleChange}
+              style={{ fontSize: '16px' }}
+            />
+          </div>
+
+          <h3 style={{ marginTop: '30px', marginBottom: '20px' }}>Parent Information</h3>
+
+          <div className="form-group">
+            <label htmlFor="parentName">Parent Name *</label>
+            <input
+              type="text"
+              id="parentName"
+              name="parentName"
+              value={formData.parentName}
+              onChange={handleChange}
+              placeholder="Parent's full name"
+              style={{ fontSize: '16px' }}
+            />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="parentEmail">Parent Email *</label>
+            <input
+              type="email"
+              id="parentEmail"
+              name="parentEmail"
+              value={formData.parentEmail}
+              onChange={handleChange}
+              placeholder="parent.email@example.com"
+              style={{ fontSize: '16px' }}
+            />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="parentPhone">Parent Phone *</label>
+            <input
+              type="tel"
+              id="parentPhone"
+              name="parentPhone"
+              value={formData.parentPhone}
+              onChange={handleChange}
+              placeholder="Parent's phone number"
+              style={{ fontSize: '16px' }}
+            />
+          </div>
+
+          <div style={{ marginTop: '30px', textAlign: 'center' }}>
+            <button 
+              type="button"
+              onClick={handleRegistration}
+              onTouchStart={(e) => {
+                console.log('Touch start detected');
+                e.preventDefault();
+              }}
+              onTouchEnd={(e) => {
+                console.log('Touch end detected');
+                e.preventDefault();
+                handleRegistration();
+              }}
+              disabled={loading}
+              className="btn"
+              style={{ 
+                width: '100%', 
+                fontSize: '18px', 
+                padding: '15px',
+                minHeight: '50px',
+                WebkitTapHighlightColor: 'transparent',
+                cursor: 'pointer',
+                border: 'none',
+                outline: 'none'
+              }}
+            >
+              {loading ? 'Processing Registration...' : 'Complete Registration'}
+            </button>
+            
+            {/* Backup button for debugging */}
+            {/* <div 
+              onClick={handleRegistration}
+              onTouchEnd={handleRegistration}
+              style={{
+                marginTop: '10px',
+                padding: '15px',
+                backgroundColor: '#28a745',
+                color: 'white',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '16px',
+                textAlign: 'center',
+                WebkitTapHighlightColor: 'rgba(0,0,0,0)',
+                userSelect: 'none'
+              }}
+            >
+              📱 Backup: Tap to Register (Mobile)
+            </div> */}
+            
+            {/* Test button */}
+            {/* <button
+              type="button"
+              onClick={() => {
+                console.log('Test button clicked!');
+                alert('Test button works! Form data: ' + JSON.stringify(formData));
+              }}
+              style={{
+                marginTop: '10px',
+                padding: '10px',
+                backgroundColor: '#ffc107',
+                color: 'black',
+                border: 'none',
+                borderRadius: '4px',
+                width: '100%'
+              }}
+            >
+              🧪 Test Button (Should work on mobile)
+            </button> */}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
