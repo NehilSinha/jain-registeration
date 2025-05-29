@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 
 export default function StudentRegister() {
@@ -9,6 +9,7 @@ export default function StudentRegister() {
   const [message, setMessage] = useState('');
   const [studentData, setStudentData] = useState(null);
   const [checkingStatus, setCheckingStatus] = useState(false);
+  const hasInitialized = useRef(false); // Prevent multiple initializations
   const [formData, setFormData] = useState({
     name: '',
     phone: '',
@@ -28,13 +29,17 @@ export default function StudentRegister() {
     'Chemical'
   ];
 
-  // Check for existing registration ONLY on component mount
+  // ONLY check localStorage ONCE on mount - NO API CALLS
   useEffect(() => {
+    // Prevent multiple initializations (React StrictMode protection)
+    if (hasInitialized.current) return;
+    hasInitialized.current = true;
+
     try {
       const savedStudentData = JSON.parse(localStorage.getItem('studentRegistration') || 'null');
       
       if (savedStudentData) {
-        console.log('Found saved data:', savedStudentData);
+        console.log('Found saved data - NO API CALL');
         setStudentData(savedStudentData);
         setMessage('Welcome back! Your registration details are shown below.');
       }
@@ -42,7 +47,7 @@ export default function StudentRegister() {
       console.error('localStorage error:', error);
       localStorage.removeItem('studentRegistration');
     }
-  }, []); // Empty dependency array - runs only once
+  }, []); // Empty deps - runs exactly once
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -70,7 +75,6 @@ export default function StudentRegister() {
       }
     }
 
-    // Basic email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(formData.email)) {
       return 'Please enter a valid email address';
@@ -79,7 +83,6 @@ export default function StudentRegister() {
       return 'Please enter a valid parent email address';
     }
 
-    // Phone validation (basic)
     if (formData.phone.length < 10) {
       return 'Please enter a valid phone number';
     }
@@ -90,10 +93,13 @@ export default function StudentRegister() {
     return null;
   };
 
+  // ONLY API call when user explicitly submits registration
   const handleRegistration = async () => {
-    console.log('Registration button clicked');
+    // Prevent multiple submissions
+    if (loading) return;
 
-    // Validate form first - no API call if validation fails
+    console.log('🚀 REGISTRATION API CALL - User initiated');
+
     const validationError = validateForm();
     if (validationError) {
       setMessage(validationError);
@@ -129,10 +135,7 @@ export default function StudentRegister() {
           registrationDate: new Date().toISOString()
         };
 
-        // Save to localStorage
         localStorage.setItem('studentRegistration', JSON.stringify(registrationData));
-        
-        // Set student data to hide form
         setStudentData(registrationData);
         setMessage('Registration successful! 🎉');
         
@@ -147,18 +150,14 @@ export default function StudentRegister() {
     }
   };
 
-  // ONLY make API call when user explicitly clicks "Update Status"
+  // ONLY API call when user explicitly clicks "Check for Updates"
   const checkStudentStatus = async () => {
-    if (!studentData?.studentId) {
-      setMessage('No student data found. Please register first.');
-      return;
-    }
+    if (!studentData?.studentId || checkingStatus) return;
 
-    // Prevent rapid multiple clicks
-    if (checkingStatus) return;
+    console.log('🔄 STATUS CHECK API CALL - User initiated');
 
     setCheckingStatus(true);
-    setMessage('Checking status...');
+    setMessage('Checking for updates...');
 
     try {
       const response = await fetch('/api/students/status', {
@@ -188,9 +187,9 @@ export default function StudentRegister() {
         
         localStorage.setItem('studentRegistration', JSON.stringify(updatedData));
         setStudentData(updatedData);
-        setMessage('Status updated successfully! 🎉');
+        setMessage('Status updated! 🎉');
       } else {
-        setMessage(data.error || 'Failed to update status');
+        setMessage(data.error || 'No updates found');
       }
     } catch (error) {
       console.error('Status check error:', error);
@@ -201,10 +200,10 @@ export default function StudentRegister() {
   };
 
   const clearRegistration = () => {
-    if (confirm('Clear your registration data?')) {
+    if (confirm('Clear your registration data? This cannot be undone.')) {
       localStorage.removeItem('studentRegistration');
       setStudentData(null);
-      setMessage('');
+      setMessage('Registration data cleared');
     }
   };
 
@@ -213,11 +212,11 @@ export default function StudentRegister() {
     
     switch (studentData.status) {
       case 'pending':
-        return 'Next: Visit the photo room with your Student ID';
+        return 'Next step: Visit the photo room with your Student ID';
       case 'photo_taken':
-        return 'Next: Visit your department admin for document verification';
+        return 'Next step: Visit your department admin for document verification';
       case 'documents_verified':
-        return 'Registration complete! ✅';
+        return 'Registration complete! ✅ All steps finished.';
       default:
         return 'Contact administration for status update';
     }
@@ -239,7 +238,7 @@ export default function StudentRegister() {
     }
   };
 
-  // Show student status if data exists
+  // Show student dashboard if registered
   if (studentData) {
     const displayId = getDisplayId();
     
@@ -249,7 +248,7 @@ export default function StudentRegister() {
           <h1>Your Registration Status</h1>
           
           {message && (
-            <div className={`alert ${message.includes('successful') || message.includes('Welcome') ? 'alert-success' : 'alert-error'}`}>
+            <div className={`alert ${message.includes('successful') || message.includes('Welcome') || message.includes('updated') ? 'alert-success' : 'alert-error'}`}>
               {message}
             </div>
           )}
@@ -293,6 +292,7 @@ export default function StudentRegister() {
                   {studentData.status.replace('_', ' ').toUpperCase()}
                 </span>
               </p>
+              <p><strong>Registered:</strong> {new Date(studentData.registrationDate).toLocaleDateString()}</p>
             </div>
 
             <div className="alert alert-success">
@@ -311,9 +311,9 @@ export default function StudentRegister() {
               onClick={checkStudentStatus}
               disabled={checkingStatus}
               className="btn btn-success"
-              style={{ minWidth: '120px' }}
+              style={{ minWidth: '140px' }}
             >
-              {checkingStatus ? 'Updating...' : '🔄 Update Status'}
+              {checkingStatus ? 'Checking...' : '🔄 Check for Updates'}
             </button>
             
             <button 
@@ -332,6 +332,11 @@ export default function StudentRegister() {
               🗑️ Clear Data
             </button>
           </div>
+
+          <div style={{ marginTop: '20px', padding: '15px', backgroundColor: '#e9ecef', borderRadius: '5px', fontSize: '14px', color: '#6c757d' }}>
+            <strong>💡 Tip:</strong> Bookmark this page! Your registration data is saved locally. 
+            Click "Check for Updates" whenever you complete a step to see your progress.
+          </div>
         </div>
       </div>
     );
@@ -342,7 +347,7 @@ export default function StudentRegister() {
     <div className="container">
       <div className="card">
         <h1>Student Registration</h1>
-        <p>Please fill in all the details for your college registration</p>
+        <p>Please fill in all details for your college registration</p>
         
         {message && (
           <div className={`alert ${message.includes('successful') ? 'alert-success' : 'alert-error'}`}>
@@ -350,7 +355,7 @@ export default function StudentRegister() {
           </div>
         )}
 
-        <div>
+        <form onSubmit={(e) => { e.preventDefault(); handleRegistration(); }}>
           <div className="form-group">
             <label htmlFor="name">Full Name *</label>
             <input
@@ -360,6 +365,7 @@ export default function StudentRegister() {
               value={formData.name}
               onChange={handleChange}
               placeholder="Enter your full name"
+              required
               style={{ fontSize: '16px' }}
             />
           </div>
@@ -373,6 +379,7 @@ export default function StudentRegister() {
               value={formData.phone}
               onChange={handleChange}
               placeholder="10-digit phone number"
+              required
               style={{ fontSize: '16px' }}
             />
           </div>
@@ -386,6 +393,7 @@ export default function StudentRegister() {
               value={formData.email}
               onChange={handleChange}
               placeholder="your.email@example.com"
+              required
               style={{ fontSize: '16px' }}
             />
           </div>
@@ -397,6 +405,7 @@ export default function StudentRegister() {
               name="department"
               value={formData.department}
               onChange={handleChange}
+              required
               style={{ fontSize: '16px' }}
             >
               <option value="">Select Department</option>
@@ -414,6 +423,7 @@ export default function StudentRegister() {
               name="dob"
               value={formData.dob}
               onChange={handleChange}
+              required
               style={{ fontSize: '16px' }}
             />
           </div>
@@ -429,6 +439,7 @@ export default function StudentRegister() {
               value={formData.parentName}
               onChange={handleChange}
               placeholder="Parent's full name"
+              required
               style={{ fontSize: '16px' }}
             />
           </div>
@@ -442,6 +453,7 @@ export default function StudentRegister() {
               value={formData.parentEmail}
               onChange={handleChange}
               placeholder="parent.email@example.com"
+              required
               style={{ fontSize: '16px' }}
             />
           </div>
@@ -455,14 +467,14 @@ export default function StudentRegister() {
               value={formData.parentPhone}
               onChange={handleChange}
               placeholder="Parent's phone number"
+              required
               style={{ fontSize: '16px' }}
             />
           </div>
 
           <div style={{ marginTop: '30px', textAlign: 'center' }}>
             <button 
-              type="button"
-              onClick={handleRegistration}
+              type="submit"
               disabled={loading}
               className="btn"
               style={{ 
@@ -470,14 +482,18 @@ export default function StudentRegister() {
                 fontSize: '18px', 
                 padding: '15px',
                 minHeight: '50px',
-                cursor: 'pointer',
-                border: 'none',
-                outline: 'none'
+                cursor: loading ? 'not-allowed' : 'pointer',
+                opacity: loading ? 0.7 : 1
               }}
             >
               {loading ? 'Processing Registration...' : 'Complete Registration'}
             </button>
           </div>
+        </form>
+
+        <div style={{ marginTop: '20px', padding: '15px', backgroundColor: '#f8f9fa', borderRadius: '5px', fontSize: '14px', color: '#6c757d' }}>
+          <strong>📱 Mobile Friendly:</strong> This form works on all devices. 
+          Your progress will be saved automatically after registration.
         </div>
       </div>
     </div>
