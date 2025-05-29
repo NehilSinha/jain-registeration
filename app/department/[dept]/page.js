@@ -16,19 +16,18 @@ export default function DepartmentAdmin() {
   const [searchTerm, setSearchTerm] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [adminData, setAdminData] = useState(null);
+  const [studentsLoaded, setStudentsLoaded] = useState(false); // Track if students are loaded
 
-  // Check authentication on mount
+  // Check authentication ONLY on mount - no automatic API calls
   useEffect(() => {
     const checkAuth = () => {
       if (!clientAuth.isLoggedIn()) {
-        // Redirect to login with return URL
         router.push(`/admin/login?redirect=${encodeURIComponent(window.location.pathname)}&department=${encodeURIComponent(department)}`);
         return;
       }
 
       const admin = clientAuth.getAdminData();
       
-      // Check if admin has access to this department
       if (admin?.role === 'department_admin' && admin?.department !== department) {
         setMessage('Access denied: You are not authorized for this department');
         setTimeout(() => {
@@ -42,14 +41,17 @@ export default function DepartmentAdmin() {
     };
 
     checkAuth();
-  }, [department, router]);
+  }, [department, router]); // Only run when department or router changes
 
-  // Fetch students for this department (with auth)
+  // ONLY fetch students when user explicitly requests it
   const fetchStudents = async () => {
     if (!isAuthenticated) return;
     
+    // Prevent multiple simultaneous requests
+    if (loading) return;
+    
     setLoading(true);
-    setMessage('');
+    setMessage('Loading students...');
     
     try {
       const response = await fetch(`/api/department/${encodeURIComponent(department)}`, {
@@ -69,12 +71,14 @@ export default function DepartmentAdmin() {
       
       if (data.success) {
         setStudents(data.students);
+        setStudentsLoaded(true);
         setMessage(`Found ${data.count} students in ${department} department`);
       } else {
         setMessage(data.error || 'Failed to fetch students');
         setStudents([]);
       }
     } catch (error) {
+      console.error('Fetch students error:', error);
       setMessage('Network error. Please try again.');
       setStudents([]);
     } finally {
@@ -82,27 +86,26 @@ export default function DepartmentAdmin() {
     }
   };
 
-  // Load students on authentication success
+  // Auto-load students only once when authenticated (optional - you can remove this)
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && !studentsLoaded) {
       fetchStudents();
     }
-  }, [isAuthenticated, department]);
+  }, [isAuthenticated]); // Only run once when authenticated
 
-  // Logout function
   const handleLogout = () => {
     clientAuth.logout();
     router.push('/admin/login');
   };
 
-  // Filter students based on search
+  // Filter students based on search (client-side filtering - no API call)
   const filteredStudents = students.filter(student => 
     student.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     student.studentId.includes(searchTerm) ||
     (student.applicationNumber && student.applicationNumber.includes(searchTerm))
   );
 
-  // Open student details modal
+  // Open student details modal (no API call)
   const openStudentDetails = (student) => {
     setSelectedStudent({
       ...student,
@@ -110,7 +113,7 @@ export default function DepartmentAdmin() {
     });
   };
 
-  // Handle document verification toggle
+  // Handle document verification toggle (client-side only)
   const toggleDocumentVerification = (docIndex) => {
     setSelectedStudent(prev => ({
       ...prev,
@@ -120,11 +123,15 @@ export default function DepartmentAdmin() {
     }));
   };
 
-  // Update student documents (with auth)
+  // ONLY update when user explicitly clicks "Update Documents"
   const updateStudentDocuments = async () => {
     if (!selectedStudent) return;
     
+    // Prevent multiple simultaneous updates
+    if (loading) return;
+    
     setLoading(true);
+    setMessage('Updating documents...');
     
     try {
       const response = await fetch(`/api/department/${encodeURIComponent(department)}`, {
@@ -150,12 +157,18 @@ export default function DepartmentAdmin() {
       if (data.success) {
         setMessage('Student documents updated successfully!');
         setSelectedStudent(null);
-        // Refresh the students list
-        fetchStudents();
+        
+        // Update the student in the local state instead of refetching all students
+        setStudents(prev => prev.map(student => 
+          student.studentId === selectedStudent.studentId 
+            ? { ...student, documentsVerified: selectedStudent.documentsVerified, status: data.newStatus || student.status }
+            : student
+        ));
       } else {
         setMessage(data.error || 'Failed to update documents');
       }
     } catch (error) {
+      console.error('Update error:', error);
       setMessage('Network error. Please try again.');
     } finally {
       setLoading(false);
@@ -219,7 +232,7 @@ export default function DepartmentAdmin() {
               disabled={loading}
               className="btn btn-refresh"
             >
-              {loading ? 'Refreshing...' : '🔄 Refresh'}
+              {loading ? 'Loading...' : '🔄 Refresh Students'}
             </button>
             <button 
               onClick={handleLogout}
@@ -237,60 +250,84 @@ export default function DepartmentAdmin() {
           </div>
         )}
 
-        {/* Search Bar */}
-        <div className="form-group">
-          <label htmlFor="search">Search Students</label>
-          <input
-            type="text"
-            id="search"
-            placeholder="Search by name, Student ID, or Application Number..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-        </div>
-
-        {/* Students List */}
-        <div className="student-list">
-          {filteredStudents.length === 0 ? (
-            <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
-              {students.length === 0 ? 'No students found for this department' : 'No students match your search'}
+        {/* Only show content if students are loaded */}
+        {studentsLoaded && (
+          <>
+            {/* Search Bar */}
+            <div className="form-group">
+              <label htmlFor="search">Search Students</label>
+              <input
+                type="text"
+                id="search"
+                placeholder="Search by name, Student ID, or Application Number..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+              <small style={{ color: '#666', fontSize: '12px' }}>
+                Searching {students.length} loaded students
+              </small>
             </div>
-          ) : (
-            filteredStudents.map((student) => (
-              <div key={student._id} className="student-item">
-                <div className="student-info">
-                  <h3>{student.name}</h3>
-                  <p><strong>Student ID:</strong> {student.studentId}</p>
-                  <p><strong>Phone:</strong> {student.phone}</p>
-                  {student.applicationNumber && (
-                    <p><strong>Application No:</strong> {student.applicationNumber}</p>
-                  )}
-                  <p><strong>Registration:</strong> {new Date(student.createdAt).toLocaleDateString()}</p>
+
+            {/* Students List */}
+            <div className="student-list">
+              {filteredStudents.length === 0 ? (
+                <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
+                  {students.length === 0 ? 'No students found for this department' : 'No students match your search'}
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div 
-                    className="status-badge"
-                    style={{ 
-                      backgroundColor: getStatusColor(student.status),
-                      color: 'white',
-                      marginBottom: '10px'
-                    }}
-                  >
-                    {student.status.replace('_', ' ').toUpperCase()}
+              ) : (
+                filteredStudents.map((student) => (
+                  <div key={student._id} className="student-item">
+                    <div className="student-info">
+                      <h3>{student.name}</h3>
+                      <p><strong>Student ID:</strong> {student.studentId}</p>
+                      <p><strong>Phone:</strong> {student.phone}</p>
+                      {student.applicationNumber && (
+                        <p><strong>Application No:</strong> {student.applicationNumber}</p>
+                      )}
+                      <p><strong>Registration:</strong> {new Date(student.createdAt).toLocaleDateString()}</p>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div 
+                        className="status-badge"
+                        style={{ 
+                          backgroundColor: getStatusColor(student.status),
+                          color: 'white',
+                          marginBottom: '10px'
+                        }}
+                      >
+                        {student.status.replace('_', ' ').toUpperCase()}
+                      </div>
+                      <br />
+                      <button 
+                        onClick={() => openStudentDetails(student)}
+                        className="btn"
+                        style={{ padding: '8px 16px', fontSize: '14px' }}
+                      >
+                        View Details
+                      </button>
+                    </div>
                   </div>
-                  <br />
-                  <button 
-                    onClick={() => openStudentDetails(student)}
-                    className="btn"
-                    style={{ padding: '8px 16px', fontSize: '14px' }}
-                  >
-                    View Details
-                  </button>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
+                ))
+              )}
+            </div>
+          </>
+        )}
+
+        {/* Show load button if students not loaded yet */}
+        {!studentsLoaded && !loading && (
+          <div style={{ textAlign: 'center', padding: '40px' }}>
+            <button 
+              onClick={fetchStudents}
+              className="btn btn-success"
+              style={{ padding: '15px 30px', fontSize: '16px' }}
+            >
+              📚 Load Students
+            </button>
+            <p style={{ marginTop: '10px', color: '#666' }}>
+              Click to load students for {department} department
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Student Details Modal */}

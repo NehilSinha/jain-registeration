@@ -28,27 +28,24 @@ export default function StudentRegister() {
     'Chemical'
   ];
 
-  // Check localStorage on component mount
+  // Check for existing registration ONLY on component mount
   useEffect(() => {
     try {
-      const savedStudentData = localStorage.getItem('studentRegistration');
-      console.log('Checking localStorage:', savedStudentData);
+      const savedStudentData = JSON.parse(localStorage.getItem('studentRegistration') || 'null');
       
       if (savedStudentData) {
-        const parsedData = JSON.parse(savedStudentData);
-        console.log('Found saved data:', parsedData);
-        setStudentData(parsedData);
+        console.log('Found saved data:', savedStudentData);
+        setStudentData(savedStudentData);
         setMessage('Welcome back! Your registration details are shown below.');
       }
     } catch (error) {
       console.error('localStorage error:', error);
       localStorage.removeItem('studentRegistration');
     }
-  }, []);
+  }, []); // Empty dependency array - runs only once
 
   const handleChange = (e) => {
     const { name, value } = e.target;
-    console.log(`Field changed: ${name} = ${value}`);
     setFormData(prev => ({
       ...prev,
       [name]: value
@@ -95,9 +92,8 @@ export default function StudentRegister() {
 
   const handleRegistration = async () => {
     console.log('Registration button clicked');
-    console.log('Current form data:', formData);
 
-    // Validate form
+    // Validate form first - no API call if validation fails
     const validationError = validateForm();
     if (validationError) {
       setMessage(validationError);
@@ -108,8 +104,6 @@ export default function StudentRegister() {
     setMessage('Processing registration...');
 
     try {
-      console.log('Sending API request...');
-      
       const response = await fetch('/api/students/register', {
         method: 'POST',
         headers: {
@@ -118,14 +112,11 @@ export default function StudentRegister() {
         body: JSON.stringify(formData),
       });
 
-      console.log('API Response status:', response.status);
-      
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        throw new Error(`Registration failed: ${response.status}`);
       }
 
       const data = await response.json();
-      console.log('API Response data:', data);
 
       if (data.success) {
         const registrationData = {
@@ -138,14 +129,8 @@ export default function StudentRegister() {
           registrationDate: new Date().toISOString()
         };
 
-        console.log('Saving to localStorage:', registrationData);
-        
         // Save to localStorage
         localStorage.setItem('studentRegistration', JSON.stringify(registrationData));
-        
-        // Verify it was saved
-        const saved = localStorage.getItem('studentRegistration');
-        console.log('Verification - data saved:', saved);
         
         // Set student data to hide form
         setStudentData(registrationData);
@@ -162,11 +147,15 @@ export default function StudentRegister() {
     }
   };
 
+  // ONLY make API call when user explicitly clicks "Update Status"
   const checkStudentStatus = async () => {
-    if (!studentData || !studentData.studentId) {
+    if (!studentData?.studentId) {
       setMessage('No student data found. Please register first.');
       return;
     }
+
+    // Prevent rapid multiple clicks
+    if (checkingStatus) return;
 
     setCheckingStatus(true);
     setMessage('Checking status...');
@@ -181,7 +170,7 @@ export default function StudentRegister() {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        throw new Error(`Status check failed: ${response.status}`);
       }
 
       const data = await response.json();
@@ -334,6 +323,14 @@ export default function StudentRegister() {
             >
               🏠 Home
             </button>
+
+            <button 
+              onClick={clearRegistration}
+              className="btn"
+              style={{ backgroundColor: '#dc3545', minWidth: '120px' }}
+            >
+              🗑️ Clear Data
+            </button>
           </div>
         </div>
       </div>
@@ -466,15 +463,6 @@ export default function StudentRegister() {
             <button 
               type="button"
               onClick={handleRegistration}
-              onTouchStart={(e) => {
-                console.log('Touch start detected');
-                e.preventDefault();
-              }}
-              onTouchEnd={(e) => {
-                console.log('Touch end detected');
-                e.preventDefault();
-                handleRegistration();
-              }}
               disabled={loading}
               className="btn"
               style={{ 
@@ -482,7 +470,6 @@ export default function StudentRegister() {
                 fontSize: '18px', 
                 padding: '15px',
                 minHeight: '50px',
-                WebkitTapHighlightColor: 'transparent',
                 cursor: 'pointer',
                 border: 'none',
                 outline: 'none'
@@ -490,46 +477,6 @@ export default function StudentRegister() {
             >
               {loading ? 'Processing Registration...' : 'Complete Registration'}
             </button>
-            
-            {/* Backup button for debugging */}
-            {/* <div 
-              onClick={handleRegistration}
-              onTouchEnd={handleRegistration}
-              style={{
-                marginTop: '10px',
-                padding: '15px',
-                backgroundColor: '#28a745',
-                color: 'white',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '16px',
-                textAlign: 'center',
-                WebkitTapHighlightColor: 'rgba(0,0,0,0)',
-                userSelect: 'none'
-              }}
-            >
-              📱 Backup: Tap to Register (Mobile)
-            </div> */}
-            
-            {/* Test button */}
-            {/* <button
-              type="button"
-              onClick={() => {
-                console.log('Test button clicked!');
-                alert('Test button works! Form data: ' + JSON.stringify(formData));
-              }}
-              style={{
-                marginTop: '10px',
-                padding: '10px',
-                backgroundColor: '#ffc107',
-                color: 'black',
-                border: 'none',
-                borderRadius: '4px',
-                width: '100%'
-              }}
-            >
-              🧪 Test Button (Should work on mobile)
-            </button> */}
           </div>
         </div>
       </div>

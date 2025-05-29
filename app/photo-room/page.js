@@ -21,18 +21,16 @@ export default function PhotoRoom() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
 
-  // Check authentication on mount
+  // Check authentication ONLY on mount - no automatic API calls
   useEffect(() => {
     const checkAuth = () => {
       if (!clientAuth.isLoggedIn()) {
-        // Redirect to login with return URL
         router.push(`/admin/login?redirect=${encodeURIComponent(window.location.pathname)}`);
         return;
       }
 
       const admin = clientAuth.getAdminData();
 
-      // Check if admin has photo_admin role
       if (admin?.role !== 'photo_admin') {
         setMessage('Access denied: You need photo admin privileges to access this page');
         setTimeout(() => {
@@ -46,16 +44,15 @@ export default function PhotoRoom() {
     };
 
     checkAuth();
-  }, [router]);
+  }, [router]); // Only run once on mount
 
-  // Logout function
   const handleLogout = () => {
-    // Stop camera if active
     stopCamera();
     clientAuth.logout();
     router.push('/admin/login');
   };
 
+  // ONLY search when user explicitly clicks Search button
   const searchStudent = async () => {
     if (!isAuthenticated) return;
 
@@ -64,12 +61,15 @@ export default function PhotoRoom() {
       return;
     }
 
+    // Prevent multiple simultaneous searches
+    if (loading) return;
+
     setLoading(true);
-    setMessage('');
+    setMessage('Searching...');
     setStudent(null);
 
     try {
-      const response = await fetch(`/api/students/photo-upload?studentId=${studentId}`, {
+      const response = await fetch(`/api/students/photo-upload?studentId=${encodeURIComponent(studentId)}`, {
         headers: {
           'Content-Type': 'application/json',
           ...clientAuth.getAuthHeaders()
@@ -88,14 +88,24 @@ export default function PhotoRoom() {
         setStudent(data.student);
         if (data.student.hasPhoto) {
           setMessage('Note: This student already has a photo uploaded');
+        } else {
+          setMessage('Student found! You can now capture their photo.');
         }
       } else {
-        setMessage(data.error);
+        setMessage(data.error || 'Student not found');
       }
     } catch (error) {
-      setMessage('Error searching for student');
+      console.error('Search error:', error);
+      setMessage('Error searching for student. Please try again.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Handle Enter key in student ID input
+  const handleStudentIdKeyPress = (e) => {
+    if (e.key === 'Enter') {
+      searchStudent();
     }
   };
 
@@ -104,40 +114,34 @@ export default function PhotoRoom() {
     try {
       setMessage('Requesting camera access...');
 
-      // Check if camera is supported
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error('Camera not supported on this device');
       }
 
-      // Try different camera configurations
       let mediaStream;
 
       try {
         // First try: Back camera with specific constraints
         mediaStream = await navigator.mediaDevices.getUserMedia({
           video: {
-            facingMode: { exact: 'environment' }, // Back camera
+            facingMode: { exact: 'environment' },
             width: { ideal: 1280, max: 1920 },
             height: { ideal: 720, max: 1080 }
           },
           audio: false
         });
       } catch (backCameraError) {
-        console.log('Back camera failed, trying front camera:', backCameraError);
-
         try {
           // Second try: Front camera
           mediaStream = await navigator.mediaDevices.getUserMedia({
             video: {
-              facingMode: 'user', // Front camera
+              facingMode: 'user',
               width: { ideal: 1280, max: 1920 },
               height: { ideal: 720, max: 1080 }
             },
             audio: false
           });
         } catch (frontCameraError) {
-          console.log('Front camera failed, trying any camera:', frontCameraError);
-
           // Third try: Any available camera
           mediaStream = await navigator.mediaDevices.getUserMedia({
             video: {
@@ -153,13 +157,10 @@ export default function PhotoRoom() {
       setShowCamera(true);
       setMessage('');
 
-      // Set video stream and wait for it to load
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
 
-        // Wait for video to be ready
         videoRef.current.onloadedmetadata = () => {
-          console.log('Video metadata loaded');
           videoRef.current.play().catch(e => {
             console.error('Video play error:', e);
             setMessage('Error starting video preview');
@@ -210,14 +211,11 @@ export default function PhotoRoom() {
     const canvas = canvasRef.current;
     const context = canvas.getContext('2d');
 
-    // Set canvas dimensions to match video
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
 
-    // Draw the video frame to canvas
     context.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    // Convert canvas to blob
     canvas.toBlob((blob) => {
       if (blob) {
         const file = new File([blob], 'student-photo.jpg', { type: 'image/jpeg' });
@@ -228,7 +226,6 @@ export default function PhotoRoom() {
           preview: preview
         });
 
-        // Stop camera after capture
         stopCamera();
         setMessage('Photo captured successfully!');
       } else {
@@ -246,6 +243,7 @@ export default function PhotoRoom() {
           file: file,
           preview: e.target.result
         });
+        setMessage('Photo selected successfully!');
       };
       reader.readAsDataURL(file);
     }
@@ -256,6 +254,7 @@ export default function PhotoRoom() {
     setMessage('');
   };
 
+  // ONLY upload when user explicitly clicks Upload button
   const uploadPhoto = async () => {
     if (!isAuthenticated) return;
 
@@ -264,15 +263,16 @@ export default function PhotoRoom() {
       return;
     }
 
+    // Prevent multiple simultaneous uploads
+    if (uploading) return;
+
     setUploading(true);
     setMessage('Uploading photo... Please wait');
 
     try {
-      // Create FormData for file upload
       const formData = new FormData();
       formData.append('studentId', student.studentId);
 
-      // Handle different photo sources
       let fileToUpload = capturedPhoto.file;
 
       // If file is too large, try to compress it on client side
@@ -297,7 +297,6 @@ export default function PhotoRoom() {
         type: fileToUpload.type
       });
 
-      // Upload with longer timeout for mobile networks
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
 
@@ -305,15 +304,12 @@ export default function PhotoRoom() {
         method: 'POST',
         headers: {
           ...clientAuth.getAuthHeaders()
-          // Don't set Content-Type for FormData - browser sets it automatically
         },
         body: formData,
         signal: controller.signal
       });
 
       clearTimeout(timeoutId);
-
-      console.log('📸 Upload response status:', response.status);
 
       if (response.status === 401) {
         clientAuth.logout();
@@ -328,11 +324,9 @@ export default function PhotoRoom() {
       }
 
       const data = await response.json();
-      console.log('📸 Upload successful:', data);
 
       if (data.success) {
         setMessage(`Success! Application Number: ${data.applicationNumber}`);
-        // Update student data with new info
         setStudent(prev => ({
           ...prev,
           applicationNumber: data.applicationNumber,
@@ -340,7 +334,6 @@ export default function PhotoRoom() {
           status: 'photo_taken'
         }));
         setCapturedPhoto(null);
-        // Clear file input
         if (fileInputRef.current) {
           fileInputRef.current.value = '';
         }
@@ -370,7 +363,6 @@ export default function PhotoRoom() {
       const img = new Image();
 
       img.onload = () => {
-        // Calculate new dimensions (max 1024x1024)
         const maxSize = 1024;
         let { width, height } = img;
 
@@ -389,7 +381,6 @@ export default function PhotoRoom() {
         canvas.width = width;
         canvas.height = height;
 
-        // Draw and compress
         ctx.drawImage(img, 0, 0, width, height);
 
         canvas.toBlob(
@@ -406,7 +397,7 @@ export default function PhotoRoom() {
             }
           },
           'image/jpeg',
-          0.8 // 80% quality
+          0.8
         );
       };
 
@@ -468,7 +459,7 @@ export default function PhotoRoom() {
         </div>
 
         {message && (
-          <div className={`alert ${message.includes('Success') || message.includes('Application Number') ? 'alert-success' : 'alert-error'}`}>
+          <div className={`alert ${message.includes('Success') || message.includes('Application Number') || message.includes('found') ? 'alert-success' : 'alert-error'}`}>
             {message}
           </div>
         )}
@@ -482,6 +473,7 @@ export default function PhotoRoom() {
               id="studentId"
               value={studentId}
               onChange={(e) => setStudentId(e.target.value)}
+              onKeyPress={handleStudentIdKeyPress}
               placeholder="Enter Student ID (e.g., 2025123456)"
               style={{ flex: 1, minWidth: '200px' }}
             />
